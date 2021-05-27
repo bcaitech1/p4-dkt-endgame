@@ -36,46 +36,68 @@ class Preprocess:
         return data_1, data_2
 
     def __save_labels(self, encoder, name):
-        le_path = os.path.join(self.args.data_dir, name + '_classes.npy')
+        le_path = os.path.join(self.args.asset_dir, name + '_classes.npy')
         np.save(le_path, encoder.classes_)
 
     def __preprocessing(self, df, is_train = True):
-        cate_cols = ['assessmentItemID', 'testId', 'KnowledgeTag']
-
-        if not os.path.exists(self.args.asset_dir):
-            os.makedirs(self.args.asset_dir)
-            
-        for col in cate_cols:
-            
-            
-            le = LabelEncoder()
-            if is_train:
-                #For UNKNOWN class
-                a = df[col].unique().tolist() + ['unknown']
-                le.fit(a)
-                self.__save_labels(le, col)
-            else:
-                label_path = os.path.join(self.args.asset_dir,col+'_classes.npy')
-                le.classes_ = np.load(label_path)
-                
-                df[col] = df[col].apply(lambda x: x if x in le.classes_ else 'unknown')
-
-            #모든 컬럼이 범주형이라고 가정
-            df[col]= df[col].astype(str)
-            test = le.transform(df[col])
-            df[col] = test
-            
-
         def convert_time(s):
             timestamp = time.mktime(datetime.strptime(s, '%Y-%m-%d %H:%M:%S').timetuple())
             return int(timestamp)
 
+        #0526 maroo
+        cols_name = [col_name for col_name in df.columns if col_name[:4] == 'add_']
+
+        if not os.path.exists(self.args.asset_dir):
+            os.makedirs(self.args.asset_dir)
+
+        #0526 maroo
+        for col in cols_name:
+            if col[-4:] == '_cat':
+                le = LabelEncoder()
+                if is_train:
+                    # For UNKNOWN class
+                    a = df[col].unique().tolist() + ['unknown']
+                    le.fit(a)
+                    self.__save_labels(le, col)
+                else:
+                    label_path = os.path.join(self.args.asset_dir, col + '_classes.npy')
+                    le.classes_ = np.load(label_path)
+
+                    df[col] = df[col].apply(lambda x: x if x in le.classes_ else 'unknown')
+
+                df[col] = df[col].astype(str)
+                test = le.transform(df[col])
+                df[col] = test
+            elif col[-4:] == '_con':
+                le = LabelEncoder()
+                if is_train:
+                    # For UNKNOWN class
+                    a = df[col].unique().tolist() + ['unknown']
+                    le.fit(a)
+                    self.__save_labels(le, col)
+                else:
+                    label_path = os.path.join(self.args.asset_dir, col + '_classes.npy')
+                    le.classes_ = np.load(label_path)
+
+                    df[col] = df[col].apply(lambda x: x if x in le.classes_ else 'unknown')
+
+                df[col] = df[col].astype(str)
+                test = le.transform(df[col])
+                df[col] = test
         df['Timestamp'] = df['Timestamp'].apply(convert_time)
         
         return df
 
     def __feature_engineering(self, df):
-        #TODO
+        #0526 maroo
+        data_type = {'userID': object, 'KnowledgeTag': object, 'answerCode': 'int16'}
+        df = df.astype(data_type)
+
+        df['add_test_pre3_cat'] = df.assessmentItemID.map(lambda x: x[1:4])
+        df['add_test_post3_cat'] = df.assessmentItemID.map(lambda x: x[4:7])
+        df['add_test_item_cat'] = df.assessmentItemID.map(lambda x: x[-3:])
+        df['add_KnowledgeTag_con'] = df.KnowledgeTag.astype('int16')
+        ###
         return df
 
     def load_data_from_file(self, file_name, is_train=True):
@@ -86,23 +108,25 @@ class Preprocess:
 
         # 추후 feature를 embedding할 시에 embedding_layer의 input 크기를 결정할때 사용
 
-                
-        self.args.n_questions = len(np.load(os.path.join(self.args.data_dir,'assessmentItemID_classes.npy')))
-        self.args.n_test = len(np.load(os.path.join(self.args.data_dir,'testId_classes.npy')))
-        self.args.n_tag = len(np.load(os.path.join(self.args.data_dir,'KnowledgeTag_classes.npy')))
-        
-
-
-        df = df.sort_values(by=['userID','Timestamp'], axis=0)
-        columns = ['userID', 'assessmentItemID', 'testId', 'answerCode', 'KnowledgeTag']
+        # 0526 maroo
+        features_name = [col_name for col_name in df.columns if col_name[:4] == 'add_']
+        self.args.n_features = {}
+        for col_name in features_name:
+            if col_name[-4:] == '_cat':
+                self.args.n_features['n_'+col_name] = len(np.load(os.path.join(self.args.asset_dir, col_name+'_classes.npy')))
+            elif col_name[-4:] == '_con':
+                self.args.n_features['n_'+col_name] = len(np.load(os.path.join(self.args.asset_dir, col_name+'_classes.npy')))
+        self.args.features_idx = {
+            i : name for i, name in enumerate(features_name)
+        }
+        df = df.sort_values(by=['userID', 'Timestamp'], axis=0)
+        columns = ['userID', 'answerCode'] + features_name
         group = df[columns].groupby('userID').apply(
-                lambda r: (
-                    r['testId'].values, 
-                    r['assessmentItemID'].values,
-                    r['KnowledgeTag'].values,
-                    r['answerCode'].values
-                )
+            lambda r: tuple(
+                r[col_name].values for col_name in columns[1:]
             )
+        )
+        ###
 
         return group.values
 
@@ -124,28 +148,26 @@ class DKTDataset(torch.utils.data.Dataset):
         # 각 data의 sequence length
         seq_len = len(row[0])
 
-        test, question, tag, correct = row[0], row[1], row[2], row[3]
-        
-
-        cate_cols = [test, question, tag, correct]
-
+        #0526 maroo
+        cols = list(row)
         # max seq len을 고려하여서 이보다 길면 자르고 아닐 경우 그대로 냅둔다
         if seq_len > self.args.max_seq_len:
-            for i, col in enumerate(cate_cols):
-                cate_cols[i] = col[-self.args.max_seq_len:]
+            for i, col in enumerate(cols):
+                cols[i] = col[-self.args.max_seq_len:]
             mask = np.ones(self.args.max_seq_len, dtype=np.int16)
         else:
             mask = np.zeros(self.args.max_seq_len, dtype=np.int16)
             mask[-seq_len:] = 1
 
         # mask도 columns 목록에 포함시킴
-        cate_cols.append(mask)
+        cols.append(mask)
 
         # np.array -> torch.tensor 형변환
-        for i, col in enumerate(cate_cols):
-            cate_cols[i] = torch.tensor(col)
+        for i, col in enumerate(cols):
+            cols[i] = torch.tensor(col)
 
-        return cate_cols
+        return cols
+        ###
 
     def __len__(self):
         return len(self.data)

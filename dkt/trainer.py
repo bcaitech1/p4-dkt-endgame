@@ -8,11 +8,12 @@ from .optimizer import get_optimizer
 from .scheduler import get_scheduler
 from .criterion import get_criterion
 from .metric import get_metric
-from .model import LSTM
+from .model import LSTM, LSTMATTN, Bert
 
 import wandb
 
 def run(args, train_data, valid_data):
+    print('Features : ', args.features_idx.values())
     train_loader, valid_loader = get_loaders(args, train_data, valid_data)
     
     # only when using warmup scheduler
@@ -33,7 +34,7 @@ def run(args, train_data, valid_data):
         train_auc, train_acc, train_loss = train(train_loader, model, optimizer, args)
         
         ### VALID
-        auc, acc = validate(valid_loader, model, args)
+        auc, acc,_ , _ = validate(valid_loader, model, args)
 
         ### TODO: model save or early stopping
         wandb.log({"epoch": epoch, "train_loss": train_loss, "train_auc": train_auc, "train_acc":train_acc,
@@ -46,7 +47,7 @@ def run(args, train_data, valid_data):
                 'epoch': epoch + 1,
                 'state_dict': model_to_save.state_dict(),
                 },
-                args.model_dir, 'model.pt',
+                args.model_dir, 'bert.pt',
             )
             early_stopping_counter = 0
         else:
@@ -71,8 +72,11 @@ def train(train_loader, model, optimizer, args):
     for step, batch in enumerate(train_loader):
         input = process_batch(batch, args)
         preds = model(input)
-        targets = input[3] # correct
 
+        #0526 maroo
+        targets = input[0]
+        preds.to('cuda')
+        targets.to('cuda')
 
         loss = compute_loss(preds, targets)
         update_params(loss, model, optimizer, args)
@@ -115,8 +119,9 @@ def validate(valid_loader, model, args):
         input = process_batch(batch, args)
 
         preds = model(input)
-        targets = input[3] # correct
 
+        #0526 maroo
+        targets = input[0]
 
         # predictions
         preds = preds[:,-1]
@@ -140,7 +145,7 @@ def validate(valid_loader, model, args):
     
     print(f'VALID AUC : {auc} ACC : {acc}\n')
 
-    return auc, acc
+    return auc, acc, total_preds, total_targets
 
 
 
@@ -157,7 +162,6 @@ def inference(args, test_data):
         input = process_batch(batch, args)
 
         preds = model(input)
-        
 
         # predictions
         preds = preds[:,-1]
@@ -174,6 +178,7 @@ def inference(args, test_data):
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)    
     with open(write_path, 'w', encoding='utf8') as w:
+        print("writing prediction : {}".format(write_path))
         w.write("id,prediction\n")
         for id, p in enumerate(total_preds):
             w.write('{},{}\n'.format(id,p))
@@ -198,9 +203,12 @@ def get_model(args):
 # 배치 전처리
 def process_batch(batch, args):
 
-    test, question, tag, correct, mask = batch
-    
-    
+    #0526 maroo
+    correct = batch[0]
+    features = batch[1:-1]
+    mask = batch[-1]
+    ###
+
     # change to float
     mask = mask.type(torch.FloatTensor)
     correct = correct.type(torch.FloatTensor)
@@ -213,11 +221,10 @@ def process_batch(batch, args):
     interaction = (interaction * mask).to(torch.int64)
     # print(interaction)
     # exit()
-    #  test_id, question_id, tag
-    test = ((test + 1) * mask).to(torch.int64)
-    question = ((question + 1) * mask).to(torch.int64)
-    tag = ((tag + 1) * mask).to(torch.int64)
 
+    #0526 maroo
+    features_int = [((f + 1) * mask).to(torch.int64) for f in features]
+    ###
     # gather index
     # 마지막 sequence만 사용하기 위한 index
     gather_index = torch.tensor(np.count_nonzero(mask, axis=1))
@@ -225,22 +232,13 @@ def process_batch(batch, args):
 
 
     # device memory로 이동
-
-    test = test.to(args.device)
-    question = question.to(args.device)
-
-
-    tag = tag.to(args.device)
-    correct = correct.to(args.device)
-    mask = mask.to(args.device)
+    #0526 maroo
+    features_int = [f.to(args.device) for f in features_int]
 
     interaction = interaction.to(args.device)
     gather_index = gather_index.to(args.device)
 
-    return (test, question,
-            tag, correct, mask,
-            interaction, gather_index)
-
+    return correct, features_int, mask, interaction, gather_index
 
 # loss계산하고 parameter update!
 def compute_loss(preds, targets):
@@ -250,11 +248,13 @@ def compute_loss(preds, targets):
         targets : (batch_size, max_seq_len)
 
     """
+    targets = targets.to('cuda')
     loss = get_criterion(preds, targets)
     #마지막 시퀀드에 대한 값만 loss 계산
     loss = loss[:,-1]
     loss = torch.mean(loss)
     return loss
+
 
 def update_params(loss, model, optimizer, args):
     loss.backward()

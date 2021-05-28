@@ -8,14 +8,16 @@ from .optimizer import get_optimizer
 from .scheduler import get_scheduler
 from .criterion import get_criterion
 from .metric import get_metric
-from .model import LSTM
+from .model import LSTM_0528
 
 import wandb
 
 def run(args, train_data, valid_data):
-    print('Features : ', args.features_idx.values())
-    train_loader, valid_loader = get_loaders(args, train_data, valid_data)
-    
+    print('Categorical Features : ', args.cate_cols)
+    print('Continuous Features : ', args.cont_cols)
+    #train_loader, valid_loader = get_loaders(args, train_data, valid_data)
+    train_loader, valid_loader = get_loaders_0528(args, train_data, valid_data)
+
     # only when using warmup scheduler
     args.total_steps = int(len(train_loader.dataset) / args.batch_size) * (args.n_epochs)
     args.warmup_steps = args.total_steps // 10
@@ -70,11 +72,10 @@ def train(train_loader, model, optimizer, args):
     total_targets = []
     losses = []
     for step, batch in enumerate(train_loader):
-        input = process_batch(batch, args)
+        #input = process_batch(batch, args)
         preds = model(input)
 
-        #0526 maroo
-        targets = input[0]
+        targets = input[-1]
         preds.to('cuda')
         targets.to('cuda')
 
@@ -116,12 +117,11 @@ def validate(valid_loader, model, args):
     total_preds = []
     total_targets = []
     for step, batch in enumerate(valid_loader):
-        input = process_batch(batch, args)
+        #input = process_batch(batch, args)
 
         preds = model(input)
 
-        #0526 maroo
-        targets = input[0]
+        targets = input[-1]
 
         # predictions
         preds = preds[:,-1]
@@ -190,7 +190,7 @@ def get_model(args):
     """
     Load model and move tensors to a given devices.
     """
-    if args.model == 'lstm': model = LSTM(args)
+    if args.model == 'lstm': model = LSTM_0528(args)
     if args.model == 'lstmattn': model = LSTMATTN(args)
     if args.model == 'bert': model = Bert(args)
     

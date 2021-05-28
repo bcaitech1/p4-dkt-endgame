@@ -68,22 +68,6 @@ class Preprocess:
                 df[col] = df[col].astype(str)
                 test = le.transform(df[col])
                 df[col] = test
-            elif col[-4:] == '_con':
-                le = LabelEncoder()
-                if is_train:
-                    # For UNKNOWN class
-                    a = df[col].unique().tolist() + ['unknown']
-                    le.fit(a)
-                    self.__save_labels(le, col)
-                else:
-                    label_path = os.path.join(self.args.asset_dir, col + '_classes.npy')
-                    le.classes_ = np.load(label_path)
-
-                    df[col] = df[col].apply(lambda x: x if x in le.classes_ else 'unknown')
-
-                df[col] = df[col].astype(str)
-                test = le.transform(df[col])
-                df[col] = test
         df['Timestamp'] = df['Timestamp'].apply(convert_time)
         
         return df
@@ -96,7 +80,7 @@ class Preprocess:
         df['add_test_pre3_cat'] = df.assessmentItemID.map(lambda x: x[1:4])
         df['add_test_post3_cat'] = df.assessmentItemID.map(lambda x: x[4:7])
         df['add_test_item_cat'] = df.assessmentItemID.map(lambda x: x[-3:])
-        df['add_KnowledgeTag_con'] = df.KnowledgeTag.astype('int16')
+        df['add_KnowledgeTag_cat'] = df.KnowledgeTag
         ###
         return df
 
@@ -106,29 +90,14 @@ class Preprocess:
         df = self.__feature_engineering(df)
         df = self.__preprocessing(df, is_train)
 
-        # 추후 feature를 embedding할 시에 embedding_layer의 input 크기를 결정할때 사용
+        # 0528 maroo
+        self.args.cate_cols = [col for col in df.columns if col[:4] == 'add_' and col[-4:] == '_cat']
+        self.args.cont_cols = [col for col in df.columns if col[:4] == 'add_' and col[-4:] == '_con']
+        self.args.total_cate_size = 1
+        for col in self.args.cate_cols:
+            self.args.total_cate_size += len(df[col].unique())
 
-        # 0526 maroo
-        features_name = [col_name for col_name in df.columns if col_name[:4] == 'add_']
-        self.args.n_features = {}
-        for col_name in features_name:
-            if col_name[-4:] == '_cat':
-                self.args.n_features['n_'+col_name] = len(np.load(os.path.join(self.args.asset_dir, col_name+'_classes.npy')))
-            elif col_name[-4:] == '_con':
-                self.args.n_features['n_'+col_name] = len(np.load(os.path.join(self.args.asset_dir, col_name+'_classes.npy')))
-        self.args.features_idx = {
-            i : name for i, name in enumerate(features_name)
-        }
-        df = df.sort_values(by=['userID', 'Timestamp'], axis=0)
-        columns = ['userID', 'answerCode'] + features_name
-        group = df[columns].groupby('userID').apply(
-            lambda r: tuple(
-                r[col_name].values for col_name in columns[1:]
-            )
-        )
-        ###
-
-        return group.values
+        return df
 
     def load_train_data(self, file_name):
         self.train_data = self.load_data_from_file(file_name)
@@ -136,6 +105,61 @@ class Preprocess:
     def load_test_data(self, file_name):
         self.test_data = self.load_data_from_file(file_name, is_train= False)
 
+
+class DKTDataset_0528(torch.utils.data.Dataset):
+    def __init__(self, df, max_seq_len=40):
+        self.df = df
+        self.max_seq_len = max_seq_len
+        self.cate_cols = []
+        self.cont_cols = []
+        for col in df.columns:
+            if col[-4:] == '_cat':
+                self.cate_cols.append(col)
+            elif col[-4:] == '_con':
+                self.cont_cols.append(col)
+
+        self.correct_seq = self.df[['userID', 'answerCode']].groupby('userID').apply(
+            lambda r: torch.tensor(tuple(
+                r['answerCode'].values
+            ))
+        ).values
+        tmp = ['userID'] + self.cate_cols
+        self.cate_seq = self.df[tmp].groupby('userID').apply(
+            lambda r: torch.tensor(tuple(
+                r[col_name].values for col_name in self.cate_cols
+            ))
+        ).values
+        tmp = ['userID'] + self.cont_cols
+        self.cont_seq = self.df[tmp].groupby('userID').apply(
+            lambda r: torch.tensor(tuple(
+                r[col_name].values for col_name in self.cont_cols
+            ))
+        ).values
+
+    def __getitem__(self, index):
+        correct_seq = self.correct_seq[index]
+        cate_seq = self.cate_seq[index]
+        cont_seq = self.cont_seq[index]
+        seq_len = len(correct_seq)
+        if seq_len > self.max_seq_len:
+            seq_len = self.max_seq_len
+
+        cate_feature = torch.zeros(self.max_seq_len, len(self.cate_cols), dtype=torch.long)
+        cont_feature = torch.zeros(self.max_seq_len, len(self.cont_cols), dtype=torch.float)
+        mask = torch.zeros(self.max_seq_len, dtype=torch.int16)
+        target = torch.zeros(self.max_seq_len)
+
+        if len(self.cate_cols) != 0:
+            cate_feature[-seq_len:] = cate_seq[:, -seq_len:].T.clone().detach()
+        if len(self.cont_cols) != 0:
+            cont_feature[-seq_len:] = cont_seq[:, -seq_len:].T.clone().detach()
+        mask[-seq_len:] = 1
+        target[-seq_len:] = torch.ShortTensor(correct_seq[-seq_len:])
+
+        return cate_feature, cont_feature, mask, target
+
+    def __len__(self):
+        return len(self.correct_seq)
 
 class DKTDataset(torch.utils.data.Dataset):
     def __init__(self, data, args):
@@ -208,5 +232,19 @@ def get_loaders(args, train, valid):
         valset = DKTDataset(valid, args)
         valid_loader = torch.utils.data.DataLoader(valset, num_workers=args.num_workers, shuffle=False,
                             batch_size=args.batch_size, pin_memory=pin_memory, collate_fn=collate)
+
+    return train_loader, valid_loader
+
+
+def get_loaders_0528(args, train, valid):
+    pin_memory = False
+    train_loader, valid_loader = None, None
+
+    if train is not None:
+        train_loader = torch.utils.data.DataLoader(train, num_workers=args.num_workers, shuffle=True,
+                                                   batch_size=args.batch_size, pin_memory=pin_memory)
+    if valid is not None:
+        valid_loader = torch.utils.data.DataLoader(valid, num_workers=args.num_workers, shuffle=False,
+                                                   batch_size=args.batch_size, pin_memory=pin_memory)
 
     return train_loader, valid_loader

@@ -235,7 +235,7 @@ def process_batch(batch, args):
 
     #0531 categorical feature들은 int로 형변환시킵니다.
     features_modified = []
-    for i, f in enumerate(features.T):
+    for i, f in enumerate(features):
         if i in args.cate_idx:
             features_modified.append(((f + 1) * mask).to(torch.int64))
         else:

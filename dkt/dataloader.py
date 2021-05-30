@@ -44,13 +44,12 @@ class Preprocess:
             timestamp = time.mktime(datetime.strptime(s, '%Y-%m-%d %H:%M:%S').timetuple())
             return int(timestamp)
 
-        #0526 maroo
         cols_name = [col_name for col_name in df.columns if col_name[:4] == 'add_']
 
         if not os.path.exists(self.args.asset_dir):
             os.makedirs(self.args.asset_dir)
 
-        #0526 maroo
+
         for col in cols_name:
             if col[-4:] == '_cat':
                 le = LabelEncoder()
@@ -68,19 +67,21 @@ class Preprocess:
                 df[col] = df[col].astype(str)
                 test = le.transform(df[col])
                 df[col] = test
+
         df['Timestamp'] = df['Timestamp'].apply(convert_time)
-        
+
         return df
 
     def __feature_engineering(self, df):
-        #0526 maroo
+        #0529 추가 feature는 column명에 'add_'를 붙여주세요.
+        #     categorical이면 '_cat', continuous면 '_con'을 뒤에 붙여주세요.
         data_type = {'userID': object, 'KnowledgeTag': object, 'answerCode': 'int16'}
         df = df.astype(data_type)
 
         df['add_test_pre3_cat'] = df.assessmentItemID.map(lambda x: x[1:4])
         df['add_test_post3_cat'] = df.assessmentItemID.map(lambda x: x[4:7])
         df['add_test_item_cat'] = df.assessmentItemID.map(lambda x: x[-3:])
-        df['add_KnowledgeTag_cat'] = df.KnowledgeTag
+        df['add_knowledgetag_con'] = df.KnowledgeTag.astype(np.float32)
         ###
         return df
 
@@ -90,14 +91,35 @@ class Preprocess:
         df = self.__feature_engineering(df)
         df = self.__preprocessing(df, is_train)
 
-        # 0528 maroo
+        #0529 categorical feature와 continuous feature를 list로 저장합니다.
         self.args.cate_cols = [col for col in df.columns if col[:4] == 'add_' and col[-4:] == '_cat']
         self.args.cont_cols = [col for col in df.columns if col[:4] == 'add_' and col[-4:] == '_con']
-        self.args.total_cate_size = 1
-        for col in self.args.cate_cols:
-            self.args.total_cate_size += len(df[col].unique())
 
-        return df
+        #0529 total_cate_size: feature를 merge할때를 위해 categorical feature의 가짓수를 전부 저장합니다.
+        #     n_cate_size    : 각 categorical feature의 가짓수를 저장합니다.
+        #     cate_idx       : categorical feature의 index를 저장합니다.
+        self.args.total_cate_size = 1
+        self.args.n_cate_size = {}
+        self.args.cate_idx = {}
+        for i, col in enumerate(self.args.cate_cols):
+            self.args.total_cate_size += len(np.load(os.path.join(self.args.asset_dir, col + '_classes.npy')))
+            self.args.n_cate_size[col] = len(np.load(os.path.join(self.args.asset_dir, col + '_classes.npy')))
+            self.args.cate_idx[i] = col
+        print(self.args.n_cate_size)
+        df = df.sort_values(by=['userID', 'Timestamp'], axis=0)
+
+        #0529 feature를 merge한다면 dataframe을 반환합니다.
+        #     merge하지 않는다면 userID로 grouping하여 그 value를 반환합니다. (baseline)
+        if self.args.merge_feature:
+            return df
+        else:
+            columns = ['userID', 'answerCode'] + self.args.cate_cols + self.args.cont_cols
+            group = df[columns].groupby('userID').apply(
+                lambda r: tuple(
+                    r[col_name].values for col_name in columns[1:]
+                )
+            )
+            return group.values
 
     def load_train_data(self, file_name):
         self.train_data = self.load_data_from_file(file_name)
@@ -106,7 +128,10 @@ class Preprocess:
         self.test_data = self.load_data_from_file(file_name, is_train= False)
 
 
-class DKTDataset_0528(torch.utils.data.Dataset):
+class DKTDataset_merge(torch.utils.data.Dataset):
+    #0531 merge시 사용하는 dataset입니다.
+    #     dataframe을 입력으로 받습니다.
+    #     categorical column과 continuous column, correct를 나눠 grouping하여 저장합니다.
     def __init__(self, df, max_seq_len=40):
         self.df = df
         self.max_seq_len = max_seq_len
@@ -137,6 +162,7 @@ class DKTDataset_0528(torch.utils.data.Dataset):
         ).values
 
     def __getitem__(self, index):
+        #0531 max_seq_len으로 내용을 뒤에서부터 잘라 저장하여 반환합니다.
         correct_seq = self.correct_seq[index]
         cate_seq = self.cate_seq[index]
         cont_seq = self.cont_seq[index]
@@ -155,11 +181,11 @@ class DKTDataset_0528(torch.utils.data.Dataset):
             cont_feature[-seq_len:] = cont_seq[:, -seq_len:].T.clone().detach()
         mask[-seq_len:] = 1
         target[-seq_len:] = torch.ShortTensor(correct_seq[-seq_len:])
-
         return cate_feature, cont_feature, mask, target
 
     def __len__(self):
         return len(self.correct_seq)
+
 
 class DKTDataset(torch.utils.data.Dataset):
     def __init__(self, data, args):
@@ -168,13 +194,9 @@ class DKTDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, index):
         row = self.data[index]
-
-        # 각 data의 sequence length
         seq_len = len(row[0])
 
-        #0526 maroo
         cols = list(row)
-        # max seq len을 고려하여서 이보다 길면 자르고 아닐 경우 그대로 냅둔다
         if seq_len > self.args.max_seq_len:
             for i, col in enumerate(cols):
                 cols[i] = col[-self.args.max_seq_len:]
@@ -183,15 +205,14 @@ class DKTDataset(torch.utils.data.Dataset):
             mask = np.zeros(self.args.max_seq_len, dtype=np.int16)
             mask[-seq_len:] = 1
 
-        # mask도 columns 목록에 포함시킴
         cols.append(mask)
 
-        # np.array -> torch.tensor 형변환
+
         for i, col in enumerate(cols):
             cols[i] = torch.tensor(col)
 
         return cols
-        ###
+
 
     def __len__(self):
         return len(self.data)
@@ -220,31 +241,27 @@ def collate(batch):
 
 
 def get_loaders(args, train, valid):
-
     pin_memory = False
     train_loader, valid_loader = None, None
-    
-    if train is not None:
-        trainset = DKTDataset(train, args)
-        train_loader = torch.utils.data.DataLoader(trainset, num_workers=args.num_workers, shuffle=True,
-                            batch_size=args.batch_size, pin_memory=pin_memory, collate_fn=collate)
-    if valid is not None:
-        valset = DKTDataset(valid, args)
-        valid_loader = torch.utils.data.DataLoader(valset, num_workers=args.num_workers, shuffle=False,
-                            batch_size=args.batch_size, pin_memory=pin_memory, collate_fn=collate)
-
-    return train_loader, valid_loader
-
-
-def get_loaders_0528(args, train, valid):
-    pin_memory = False
-    train_loader, valid_loader = None, None
-
-    if train is not None:
-        train_loader = torch.utils.data.DataLoader(train, num_workers=args.num_workers, shuffle=True,
+    #0531 merge라면 dataframe, 그렇지않다면 group.values로 입력받습니다.
+    if args.merge_feature:
+        #0531 max_seq_len으로 선언하여 사용하기때문에 collate 함수는 사용하지 않습니다.
+        if train is not None:
+            trainset = DKTDataset_merge(train, args.max_seq_len)
+            train_loader = torch.utils.data.DataLoader(trainset, num_workers=args.num_workers, shuffle=True,
                                                    batch_size=args.batch_size, pin_memory=pin_memory)
-    if valid is not None:
-        valid_loader = torch.utils.data.DataLoader(valid, num_workers=args.num_workers, shuffle=False,
+        if valid is not None:
+            valset = DKTDataset_merge(valid, args.max_seq_len)
+            valid_loader = torch.utils.data.DataLoader(valset, num_workers=args.num_workers, shuffle=True,
                                                    batch_size=args.batch_size, pin_memory=pin_memory)
+    else:
+        if train is not None:
+            trainset = DKTDataset(train, args)
+            train_loader = torch.utils.data.DataLoader(trainset, num_workers=args.num_workers, shuffle=True,
+                                batch_size=args.batch_size, pin_memory=pin_memory, collate_fn=collate)
+        if valid is not None:
+            valset = DKTDataset(valid, args)
+            valid_loader = torch.utils.data.DataLoader(valset, num_workers=args.num_workers, shuffle=False,
+                                batch_size=args.batch_size, pin_memory=pin_memory, collate_fn=collate)
 
     return train_loader, valid_loader

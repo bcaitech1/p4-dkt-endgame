@@ -8,16 +8,13 @@ from .optimizer import get_optimizer
 from .scheduler import get_scheduler
 from .criterion import get_criterion
 from .metric import get_metric
-from .model import LSTM_0528
+from .model import LSTM, LSTMATTN, Bert, LSTM_merge
 
 import wandb
 
 def run(args, train_data, valid_data):
-    print('Categorical Features : ', args.cate_cols)
-    print('Continuous Features : ', args.cont_cols)
-    #train_loader, valid_loader = get_loaders(args, train_data, valid_data)
-    train_loader, valid_loader = get_loaders_0528(args, train_data, valid_data)
-
+    train_loader, valid_loader = get_loaders(args, train_data, valid_data)
+    
     # only when using warmup scheduler
     args.total_steps = int(len(train_loader.dataset) / args.batch_size) * (args.n_epochs)
     args.warmup_steps = args.total_steps // 10
@@ -25,6 +22,8 @@ def run(args, train_data, valid_data):
     model = get_model(args)
     optimizer = get_optimizer(model, args)
     scheduler = get_scheduler(optimizer, args)
+
+    model = model.to(args.device)
 
     best_auc = -1
     early_stopping_counter = 0
@@ -72,12 +71,16 @@ def train(train_loader, model, optimizer, args):
     total_targets = []
     losses = []
     for step, batch in enumerate(train_loader):
-        #input = process_batch(batch, args)
+        input = batch
+        #0531 현재 merge는 process_batch를 사용하지 않습니다.
+        if args.merge_feature == False:
+            input = process_batch(batch, args)
         preds = model(input)
 
-        targets = input[-1]
-        preds.to('cuda')
-        targets.to('cuda')
+        if args.merge_feature:
+            targets = input[-1]
+        else:
+            targets = input[0]
 
         loss = compute_loss(preds, targets)
         update_params(loss, model, optimizer, args)
@@ -117,11 +120,15 @@ def validate(valid_loader, model, args):
     total_preds = []
     total_targets = []
     for step, batch in enumerate(valid_loader):
-        #input = process_batch(batch, args)
-
+        input = batch
+        if args.merge_feature == False:
+            input = process_batch(batch, args)
         preds = model(input)
 
-        targets = input[-1]
+        if args.merge_feature:
+            targets = input[-1]
+        else:
+            targets = input[0]
 
         # predictions
         preds = preds[:,-1]
@@ -150,7 +157,6 @@ def validate(valid_loader, model, args):
 
 
 def inference(args, test_data):
-    
     model = load_model(args)
     model.eval()
     _, test_loader = get_loaders(args, None, test_data)
@@ -159,7 +165,9 @@ def inference(args, test_data):
     total_preds = []
     
     for step, batch in enumerate(test_loader):
-        input = process_batch(batch, args)
+        input = batch
+        if args.merge_feature == False:
+            input = process_batch(batch, args)
 
         preds = model(input)
 
@@ -190,10 +198,12 @@ def get_model(args):
     """
     Load model and move tensors to a given devices.
     """
-    if args.model == 'lstm': model = LSTM_0528(args)
-    if args.model == 'lstmattn': model = LSTMATTN(args)
-    if args.model == 'bert': model = Bert(args)
-    
+    if args.merge_feature:
+        if args.model == 'lstm': model = LSTM_merge(args)
+    else:
+        if args.model == 'lstm': model = LSTM(args)
+        if args.model == 'lstmattn': model = LSTMATTN(args)
+        if args.model == 'bert': model = Bert(args)
 
     model.to(args.device)
 
@@ -202,17 +212,18 @@ def get_model(args):
 
 # 배치 전처리
 def process_batch(batch, args):
-
-    #0526 maroo
-    correct = batch[0]
-    features = batch[1:-1]
-    mask = batch[-1]
-    ###
+    #0531 merge 여부에 따라 dataloader의 순서가 다릅니다.
+    #     현재 merge는 process_batch를 사용하지 않지만, 추후를 위해 남겨둡니다.
+    if args.merge_feature:
+        features, cont, mask, correct = batch
+    else:
+        correct = batch[0]
+        features = batch[1:-1]
+        mask = batch[-1]
 
     # change to float
     mask = mask.type(torch.FloatTensor)
     correct = correct.type(torch.FloatTensor)
-
     #  interaction을 임시적으로 correct를 한칸 우측으로 이동한 것으로 사용
     #    saint의 경우 decoder에 들어가는 input이다
     interaction = correct + 1 # 패딩을 위해 correct값에 1을 더해준다.
@@ -222,8 +233,14 @@ def process_batch(batch, args):
     # print(interaction)
     # exit()
 
-    #0526 maroo
-    features_int = [((f + 1) * mask).to(torch.int64) for f in features]
+    #0531 categorical feature들은 int로 형변환시킵니다.
+    features_modified = []
+    for i, f in enumerate(features.T):
+        if i in args.cate_idx:
+            features_modified.append(((f + 1) * mask).to(torch.int64))
+        else:
+            features_modified.append(f)
+
     ###
     # gather index
     # 마지막 sequence만 사용하기 위한 index
@@ -233,12 +250,17 @@ def process_batch(batch, args):
 
     # device memory로 이동
     #0526 maroo
-    features_int = [f.to(args.device) for f in features_int]
+    features_modified = [f.to(args.device) for f in features_modified]
 
     interaction = interaction.to(args.device)
     gather_index = gather_index.to(args.device)
 
-    return correct, features_int, mask, interaction, gather_index
+    #0531 merge 여부에따라 반환값의 순서가 다릅니다.
+    if args.merge_feature:
+        return correct, features_modified, cont, mask, interaction, gather_index
+    else:
+        return correct, features_modified, mask, interaction, gather_index
+
 
 # loss계산하고 parameter update!
 def compute_loss(preds, targets):

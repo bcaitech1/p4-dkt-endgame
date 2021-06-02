@@ -11,5 +11,5 @@
 ## Train & Inference
 
   ```shell
-   $ python elo.py
+   $ python elo_training/elo.py
   ```

@@ -10,8 +10,6 @@
 
 ## Train & Inference
 
-- Train
-
   ```shell
    $ python elo.py
   ```

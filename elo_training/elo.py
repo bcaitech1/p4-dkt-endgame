@@ -30,7 +30,7 @@ def probability_of_good_answer(theta, beta, left_asymptote):
 def sigmoid(x):
     return 1 / (1 + np.exp(-x))
 
-def estimate_parameters(answers_df, granularity_feature_name='KnowledgeTag'):
+def estimate_parameters(answers_df, granularity_feature_name='assessmentItemID'):
     item_parameters = {
         granularity_feature_value: {"beta": 0, "nb_answers": 0}
         for granularity_feature_value in np.unique(answers_df[granularity_feature_name])
@@ -62,7 +62,7 @@ def estimate_parameters(answers_df, granularity_feature_name='KnowledgeTag'):
     return student_parameters, item_parameters
 
 
-def update_parameters(answers_df, student_parameters, item_parameters, granularity_feature_name='KnowledgeTag'):
+def update_parameters(answers_df, student_parameters, item_parameters, granularity_feature_name='assessmentItemID'):
     for student_id, item_id, left_asymptote, answerCode in tqdm(zip(
         answers_df.student_id.values, 
         answers_df[granularity_feature_name].values, 
@@ -91,7 +91,7 @@ def update_parameters(answers_df, student_parameters, item_parameters, granulari
         
     return student_parameters, item_parameters
 
-def estimate_probas(test_df, student_parameters, item_parameters, granularity_feature_name='KnowledgeTag'):
+def estimate_probas(test_df, student_parameters, item_parameters, granularity_feature_name='assessmentItemID'):
     probability_of_success_list = []
     
     for student_id, item_id, left_asymptote in tqdm(
@@ -107,7 +107,7 @@ def estimate_probas(test_df, student_parameters, item_parameters, granularity_fe
 def load_data(data_dir):
     df = pd.read_csv(
         filepath_or_buffer=data_dir,
-        usecols=['userID', 'KnowledgeTag', 'answerCode'],
+        usecols=['userID', 'assessmentItemID', 'answerCode'],
         dtype = {'answerCode': 'int8'},
         )
     df.rename(columns={'userID': 'student_id'}, inplace=True)
@@ -173,8 +173,8 @@ def inference(args, test_df,student_parameters, item_parameters):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--train_dir', type=str, default='../input/data/train_dataset/train_data.csv')
-    parser.add_argument('--test_dir', type=str, default='../input/data/train_dataset/test_data.csv')
+    parser.add_argument('--train_dir', type=str, default='../../../input/data/train_dataset/train_data.csv')
+    parser.add_argument('--test_dir', type=str, default='../../../input/data/train_dataset/test_data.csv')
     parser.add_argument('--output_dir', type=str, default='./output')
     parser.add_argument('--name', type=str, default='elo', help='result save at {output_dir}/{name}')
 

@@ -227,13 +227,4 @@ if __name__ == '__main__':
             print("\n")
             print(f"best epoch of {n_fold} fold", best_epoch)
             
-            
-    # # Train and get the best episode
-    # best_epoch = train_one_dataset(
-    #     params, file_name, train_q_data, train_qa_data, train_pid, valid_q_data, valid_qa_data, valid_pid)
-    # test_data_path = params.data_dir + "/" + \
-    #     params.data_name + "_test"+str(params.train_set)+".csv"
-    # test_q_data, test_qa_data, test_index = dat.load_data(
-    #     test_data_path)
-    # test_one_dataset(params, file_name, test_q_data,
-    #                  test_qa_data, test_index, best_epoch)
+ 

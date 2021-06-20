@@ -39,7 +39,10 @@ based by [Context-Aware Attentive Knowledge Tracing (AKT)](https://arxiv.org/abs
 ### Train & Inference  
   
  ```shell  $ python elo.py ```  
- 
+## Other Models Available
+- SAINT
+별도 폴더에 코드와 사용예시가 존재합니다.  
+
 # Members  
 ## Team ENDGAME
 | 김한마루 | 소재열 | 이대훈 | 정지훈 | 최이서 | 홍승우 |  

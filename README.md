@@ -40,7 +40,7 @@ based by [Context-Aware Attentive Knowledge Tracing (AKT)](https://arxiv.org/abs
   
  ```shell  $ python elo.py ```  
 ## Other Models Available
-- SAINT
+- SAINT  
 별도 폴더에 코드와 사용예시가 존재합니다.  
 
 # Members  

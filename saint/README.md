@@ -1,8 +1,8 @@
 # SAINT
 
-**Disclaimer: This model was excluded from the final submission.**
+**Disclaimer: This model was excluded from the final submission model.**
 
-This is an implementation of the SAINT model modified to fit with i-Scream dataset.  
+This is an implementation of the SAINT model modified to fit i-Scream dataset.  
 The single model performance scored AUROC of 0.7027 on the public leaderboard.  
 
 ### Run (Train & Inference)

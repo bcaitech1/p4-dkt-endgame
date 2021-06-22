@@ -47,4 +47,4 @@ based by [Context-Aware Attentive Knowledge Tracing (AKT)](https://arxiv.org/abs
 ## Team ENDGAME
 | 김한마루 | 소재열 | 이대훈 | 정지훈 | 최이서 | 홍승우 |  
 | :-: | :-: | :-: | :-: | :-: | :-: |
-|github|github|github|github|github|github|
+|github|github|github|github|[github](https://github.com/iseochoi)|github|
